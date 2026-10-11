@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>English Trainer</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="/static/style.css?v=8">
+</head>
+<body>
+
+  <!-- Вход -->
+  <div id="login-view" class="login-wrap hidden">
+    <form id="login-form" class="login-card">
+      <h1>🎓 English Trainer</h1>
+      <p class="muted">Войдите, чтобы продолжить</p>
+      <label>Логин
+        <input id="login-username" autocomplete="username" required>
+      </label>
+      <label>Пароль
+        <input id="login-password" type="password" autocomplete="current-password" required>
+      </label>
+      <button class="btn primary wide" type="submit">Войти</button>
+      <p id="login-error" class="error-text hidden"></p>
+    </form>
+  </div>
+
+  <!-- Основное приложение -->
+  <div id="app-view" class="hidden">
+    <header class="topbar">
+      <div class="brand">🎓 English&nbsp;Trainer</div>
+      <nav class="topnav">
+        <button class="nav-btn active" data-nav="lessons">Уроки</button>
+        <button class="nav-btn hidden" data-nav="teacher" id="nav-teacher">Управление</button>
+      </nav>
+      <div class="userbox">
+        <span id="user-badge" class="user-badge"></span>
+        <button class="btn ghost" id="logout-btn">Выйти</button>
+      </div>
+    </header>
+
+    <div class="layout">
+      <main id="main"></main>
+      <aside class="sidebar">
+        <div class="panel">
+          <h3>Сейчас онлайн</h3>
+          <ul id="online-list" class="plain-list"><li class="muted">—</li></ul>
+        </div>
+        <div class="panel">
+          <h3>За работой</h3>
+          <ul id="live-list" class="plain-list"><li class="muted">Никто не работает над уроком</li></ul>
+        </div>
+        <div class="panel grow">
+          <h3>Активность</h3>
+          <ul id="activity-list" class="plain-list feed"><li class="muted">Пока пусто</li></ul>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <!-- Модальное окно редактора урока (учитель) -->
+  <div id="lesson-modal" class="modal hidden">
+    <div class="modal-card">
+      <h2 id="lesson-modal-title">Новый урок</h2>
+      <input type="hidden" id="lesson-id">
+      <label>Название
+        <input id="lesson-title" placeholder="Например: A Healthy Lifestyle">
+      </label>
+      <label>Тема
+        <input id="lesson-topic" placeholder="Например: Здоровье">
+      </label>
+      <label>Видео YouTube (необязательно)
+        <input id="lesson-video" placeholder="https://www.youtube.com/watch?v=...">
+      </label>
+      <label>Текст урока
+        <textarea id="lesson-text" rows="10"
+          placeholder="Вставьте текст. Изучаемые выражения выделите двойными звёздочками: **выражение**. Разрыв для 1.1: **give|up**. Слово для 1.3 (необязательно, по умолчанию — последнее): **a balanced|diet|balanced**"></textarea>
+      </label>
+      <div class="tasks-visible-box">
+        <h4>Видимость заданий для ученика</h4>
+        <label class="cb"><input type="checkbox" id="vis-11" checked> Задание 1.1 — собери выражения</label>
+        <label class="cb"><input type="checkbox" id="vis-12" checked> Задание 1.2 — вставь выражения</label>
+        <label class="cb"><input type="checkbox" id="vis-13" checked> Задание 1.3 — впиши недостающее слово</label>
+      </div>
+      <div class="expr-preview-box">
+        <h4>Разобранные выражения <span id="expr-count" class="muted"></span></h4>
+        <ul id="expr-preview" class="plain-list"></ul>
+      </div>
+      <p id="lesson-modal-error" class="error-text hidden"></p>
+      <div class="modal-actions">
+        <button class="btn ghost" id="lesson-cancel">Отмена</button>
+        <button class="btn primary" id="lesson-save">Сохранить</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="/static/app.js?v=8"></script>
+</body>
+</html>
