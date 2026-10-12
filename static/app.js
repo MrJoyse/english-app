@@ -370,7 +370,12 @@ async function showTeacher() {
           esc(u.username) +
           "</b> <span class='muted'>" +
           (u.role === "teacher" ? "учитель" : "ученик") +
-          "</span></td>" +
+          "</span> " +
+          '<button class="btn reset-pw-btn" data-resetpw="' +
+          u.id +
+          '" data-name="' +
+          esc(u.username) +
+          '">🔑 Сбросить пароль</button></td>' +
           lessons
             .map((l) => {
               const tasks = (progress[String(l.id)] || {})[u.username] || [];
@@ -427,6 +432,29 @@ async function showTeacher() {
       err.classList.remove("hidden");
     }
   });
+
+  $$(".reset-pw-btn").forEach((b) =>
+    b.addEventListener("click", async () => {
+      const name = b.dataset.name;
+      const pw = prompt(
+        "Новый пароль для «" + name + "» (не короче 4 символов):"
+      );
+      if (pw === null) return; // отмена
+      if (pw.length < 4) {
+        toast("Пароль должен быть не короче 4 символов", true);
+        return;
+      }
+      try {
+        await api("/api/users/" + b.dataset.resetpw + "/password", {
+          method: "PUT",
+          body: JSON.stringify({ password: pw }),
+        });
+        toast("Пароль для «" + name + "» изменён");
+      } catch (ex) {
+        toast(ex.message, true);
+      }
+    })
+  );
 
   const visSel = $("#vis-lesson");
   if (visSel) {

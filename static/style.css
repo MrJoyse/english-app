@@ -11,6 +11,7 @@
   --red: #dc2626;
   --red-soft: #fee2e2;
   --amber-soft: #fef3c7;
+  --accent-soft: #dbeafe;
   --radius: 12px;
 }
 
@@ -74,6 +75,8 @@ textarea { resize: vertical; }
 .btn.danger:hover { background: var(--red-soft); }
 .btn.ghost { background: transparent; }
 .btn.wide { width: 100%; margin-top: 18px; }
+.reset-pw-btn { font-size: 13px; padding: 4px 10px; margin-left: 6px; font-weight: 500; }
+.reset-pw-btn:hover { background: var(--accent-soft); border-color: var(--accent); }
 
 .error-text { color: var(--red); font-size: 14px; margin: 12px 0 0; }
 

@@ -853,6 +853,29 @@ def api_user_create(
     return {"ok": True, "user": user_dict(user)}
 
 
+class PasswordResetIn(BaseModel):
+    password: str
+
+
+@app.put("/api/users/{user_id}/password")
+def api_user_reset_password(
+    user_id: int,
+    payload: PasswordResetIn,
+    db: Session = Depends(get_db),
+    teacher: User = Depends(current_teacher),
+):
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+    if len(payload.password) < 4:
+        raise HTTPException(
+            status_code=400, detail="Пароль должен быть не короче 4 символов"
+        )
+    user.password_hash = auth.hash_password(payload.password)
+    db.commit()
+    return {"ok": True}
+
+
 class TaskVisibilityIn(BaseModel):
     user_id: int
     lesson_id: int
