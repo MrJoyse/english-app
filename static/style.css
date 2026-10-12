@@ -57,6 +57,7 @@ input, textarea {
 }
 input:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: 0; border-color: transparent; }
 textarea { resize: vertical; }
+#lesson-text { min-height: 560px; line-height: 1.5; }
 
 .btn {
   border: 1px solid var(--line);

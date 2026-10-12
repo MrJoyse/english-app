@@ -1305,15 +1305,44 @@ async function openLessonEditor(lessonId) {
     }
   }
   refreshExprPreview();
+  lessonSnapshot = lessonFormState();
   modal.classList.remove("hidden");
 }
 
+// снимок полей формы урока — для отслеживания несохранённых изменений
+let lessonSnapshot = "";
+function lessonFormState() {
+  return JSON.stringify({
+    title: $("#lesson-title").value,
+    topic: $("#lesson-topic").value,
+    video: $("#lesson-video").value,
+    text: $("#lesson-text").value,
+    vis: [$("#vis-11").checked, $("#vis-12").checked, $("#vis-13").checked],
+  });
+}
+function lessonFormDirty() {
+  return lessonFormState() !== lessonSnapshot;
+}
+function tryCloseLessonModal() {
+  if (
+    lessonFormDirty() &&
+    !confirm("Закрыть без сохранения? Все изменения будут потеряны.")
+  )
+    return;
+  $("#lesson-modal").classList.add("hidden");
+}
+
 $("#lesson-text").addEventListener("input", refreshExprPreview);
-$("#lesson-cancel").addEventListener("click", () =>
-  $("#lesson-modal").classList.add("hidden")
-);
+$("#lesson-cancel").addEventListener("click", tryCloseLessonModal);
 $("#lesson-modal").addEventListener("click", (e) => {
-  if (e.target.id === "lesson-modal") $("#lesson-modal").classList.add("hidden");
+  if (e.target.id === "lesson-modal") tryCloseLessonModal();
+});
+document.addEventListener("keydown", (e) => {
+  if (
+    e.key === "Escape" &&
+    !$("#lesson-modal").classList.contains("hidden")
+  )
+    tryCloseLessonModal();
 });
 
 $("#lesson-save").addEventListener("click", async () => {
