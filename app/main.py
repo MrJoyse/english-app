@@ -16,7 +16,14 @@ from sqlalchemy.orm import Session
 
 from . import auth
 from .database import Base, SessionLocal, engine, get_db
-from .models import Expression, Lesson, Progress, SessionToken, User
+from .models import (
+    Expression,
+    Lesson,
+    Progress,
+    SessionToken,
+    TaskVisibility,
+    User,
+)
 from .parsing import EXPR_RE, SENTENCE_SPLIT_RE, parse_expressions, youtube_id
 
 Base.metadata.create_all(bind=engine)
@@ -102,6 +109,12 @@ class UserIn(BaseModel):
     username: str
     password: str
     role: str = "student"
+
+
+class VisibilityIn(BaseModel):
+    user_id: int
+    lesson_id: int
+    tasks: Optional[List[str]] = None
 
 
 def user_dict(user: User) -> dict:
@@ -242,7 +255,7 @@ def progress_map(db) -> dict:
     return result
 
 
-def build_lesson_payload(lesson: Lesson, db: Session) -> dict:
+def build_lesson_payload(lesson: Lesson, db: Session, user: User = None) -> dict:
     exprs = (
         db.query(Expression)
         .filter_by(lesson_id=lesson.id)
@@ -348,7 +361,10 @@ def build_lesson_payload(lesson: Lesson, db: Session) -> dict:
         "chips": chips,
         "sentences_html": "".join(sentences_html),
         "sentences13_html": "".join(sentences13),
-        "visible_tasks": _visible_task_list(lesson),
+        "visible_tasks": _task_visibility_for(db, user, lesson)
+        if user is not None
+        else _visible_task_list(lesson),
+        "default_visible_tasks": _visible_task_list(lesson),
         "board": LESSON_BOARD.setdefault(lesson.id, initial_board_for(lesson, db)),
         "progress": progress_map(db).get(str(lesson.id), {}),
     }
@@ -402,7 +418,8 @@ def api_lessons(db: Session = Depends(get_db), user: User = Depends(current_user
                 "topic": l.topic or "",
                 "expression_count": counts[str(l.id)],
                 "video_id": youtube_id(l.video_url),
-                "visible_tasks": _visible_task_list(l),
+                "visible_tasks": _task_visibility_for(db, user, l),
+                "default_visible_tasks": _visible_task_list(l),
             }
             for l in lessons
         ],
@@ -420,7 +437,7 @@ def api_lesson(
     lesson = db.get(Lesson, lesson_id)
     if not lesson:
         raise HTTPException(status_code=404, detail="Урок не найден")
-    return build_lesson_payload(lesson, db)
+    return build_lesson_payload(lesson, db, user)
 
 
 @app.post("/api/lessons/{lesson_id}/open")
@@ -468,6 +485,42 @@ def _clean_visible_tasks(value):
             status_code=400, detail="Отметьте хотя бы одно задание для показа ученику"
         )
     return ",".join(tasks)
+
+
+def _clean_visibility_override(value):
+    """Очистка индивидуального набора заданий ученика.
+
+    В отличие от урокового дефолта, здесь допускается пустой список — это
+    означает «скрыть все задания урока для данного ученика».
+    """
+    return ",".join(t for t in (value or []) if t in TASKS)
+
+
+def _task_visibility_for(db, user, lesson):
+    """Эффективный список видимых заданий для конкретного пользователя.
+
+    Если для пары (пользователь, урок) есть индивидуальная настройка — она
+    имеет приоритет над уроковым значением по умолчанию.
+    """
+    override = (
+        db.query(TaskVisibility)
+        .filter_by(user_id=user.id, lesson_id=lesson.id)
+        .first()
+    )
+    if override is not None:
+        raw = (override.visible_tasks or "").replace(" ", "")
+        return [t for t in raw.split(",") if t in TASKS]
+    return _visible_task_list(lesson)
+
+
+def _all_visibility(db):
+    """Карта индивидуальных настроек: {lesson_id: {user_id: [задания]}}."""
+    result = {}
+    for row in db.query(TaskVisibility).all():
+        raw = (row.visible_tasks or "").replace(" ", "")
+        tasks = [t for t in raw.split(",") if t in TASKS]
+        result.setdefault(str(row.lesson_id), {})[str(row.user_id)] = tasks
+    return result
 
 
 def _save_expressions(db, lesson_id, exprs):
@@ -585,6 +638,7 @@ async def api_lesson_delete(
     title = lesson.title
     db.query(Expression).filter_by(lesson_id=lesson_id).delete()
     db.query(Progress).filter_by(lesson_id=lesson_id).delete()
+    db.query(TaskVisibility).filter_by(lesson_id=lesson_id).delete()
     LESSON_BOARD.pop(lesson_id, None)
     db.delete(lesson)
     db.commit()
@@ -610,7 +664,7 @@ async def api_progress(
     lesson = db.get(Lesson, payload.lesson_id)
     if not lesson:
         raise HTTPException(status_code=404, detail="Урок не найден")
-    if payload.task not in _visible_task_list(lesson):
+    if payload.task not in _task_visibility_for(db, user, lesson):
         raise HTTPException(status_code=400, detail="Задание скрыто учителем")
     existing = (
         db.query(Progress)
@@ -663,7 +717,7 @@ async def api_lesson_action(
     lesson = db.get(Lesson, lesson_id)
     if not lesson:
         raise HTTPException(status_code=404, detail="Урок не найден")
-    if payload.task not in _visible_task_list(lesson):
+    if payload.task not in _task_visibility_for(db, user, lesson):
         raise HTTPException(status_code=400, detail="Задание скрыто учителем")
     detail = (payload.detail or "").strip()[:200]
     expected = (payload.expected or "").strip()[:200]
@@ -756,8 +810,16 @@ def api_users(db: Session = Depends(get_db), teacher: User = Depends(current_tea
     lessons = db.query(Lesson).order_by(Lesson.id).all()
     return {
         "users": [user_dict(u) for u in users],
-        "lessons": [{"id": l.id, "title": l.title} for l in lessons],
+        "lessons": [
+            {
+                "id": l.id,
+                "title": l.title,
+                "default_visible_tasks": _visible_task_list(l),
+            }
+            for l in lessons
+        ],
         "progress": progress_map(db),
+        "task_visibility": _all_visibility(db),
     }
 
 
@@ -789,6 +851,62 @@ def api_user_create(
     db.add(user)
     db.commit()
     return {"ok": True, "user": user_dict(user)}
+
+
+class TaskVisibilityIn(BaseModel):
+    user_id: int
+    lesson_id: int
+    visible_tasks: Optional[List[str]] = None  # набор заданий ([] → скрыть все)
+    reset: bool = False  # True → вернуть уроковый набор по умолчанию
+
+
+@app.put("/api/task-visibility")
+def api_task_visibility_set(
+    payload: TaskVisibilityIn,
+    db: Session = Depends(get_db),
+    teacher: User = Depends(current_teacher),
+):
+    """Индивидуальная видимость заданий урока для конкретного ученика.
+
+    reset=True снимает индивидуальную настройку (ученик видит уроковый
+    набор по умолчанию). Иначе сохраняется переданный набор: пустой список
+    означает, что ученик не видит заданий этого урока вовсе.
+    """
+    user = db.get(User, payload.user_id)
+    if not user or user.role != "student":
+        raise HTTPException(status_code=400, detail="Ученик не найден")
+    lesson = db.get(Lesson, payload.lesson_id)
+    if not lesson:
+        raise HTTPException(status_code=404, detail="Урок не найден")
+    default = _visible_task_list(lesson)
+    cleaned = [t for t in (payload.visible_tasks or []) if t in TASKS]
+    if payload.reset or sorted(cleaned) == sorted(default):
+        # Совпадает с уроковым значением по умолчанию — настройка не нужна.
+        db.query(TaskVisibility).filter_by(
+            user_id=user.id, lesson_id=lesson.id
+        ).delete()
+        db.commit()
+        return {"ok": True, "visible_tasks": default, "custom": False}
+    raw = _clean_visibility_override(payload.visible_tasks)
+    row = (
+        db.query(TaskVisibility)
+        .filter_by(user_id=user.id, lesson_id=lesson.id)
+        .first()
+    )
+    if row:
+        row.visible_tasks = raw
+    else:
+        db.add(
+            TaskVisibility(
+                user_id=user.id, lesson_id=lesson.id, visible_tasks=raw
+            )
+        )
+    db.commit()
+    return {
+        "ok": True,
+        "visible_tasks": [t for t in raw.split(",") if t in TASKS],
+        "custom": True,
+    }
 
 
 # ------------------------------------------------------------------ WebSocket

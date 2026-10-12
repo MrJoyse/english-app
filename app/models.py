@@ -36,6 +36,22 @@ class Lesson(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class TaskVisibility(Base):
+    """Переопределение видимости заданий для конкретного ученика в уроке.
+
+    Если строки для (user_id, lesson_id) нет — действует уроковый дефолт
+    lessons.visible_tasks. Сама строка хранит список заданий через запятую.
+    """
+
+    __tablename__ = "task_visibility"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    lesson_id = Column(Integer, ForeignKey("lessons.id"), index=True, nullable=False)
+    visible_tasks = Column(String(100), default="1.1,1.2,1.3")
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+
 class Expression(Base):
     __tablename__ = "expressions"
 

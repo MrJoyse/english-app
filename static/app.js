@@ -91,6 +91,7 @@ async function boot() {
   $("#user-badge").textContent =
     state.user.username + " · " + (state.user.role === "teacher" ? "учитель" : "ученик");
   $("#nav-teacher").classList.toggle("hidden", state.user.role !== "teacher");
+  $("#help-btn").classList.toggle("hidden", state.user.role !== "teacher");
   connectWS();
   await showLessons();
 }
@@ -106,6 +107,38 @@ $$(".nav-btn").forEach((btn) => {
 function setActiveNav(name) {
   $$(".nav-btn").forEach((b) => b.classList.toggle("active", b.dataset.nav === name));
 }
+/* ============================================================ справка учителя */
+function openHelp() {
+  $("#help-modal").classList.remove("hidden");
+}
+function closeHelp() {
+  $("#help-modal").classList.add("hidden");
+}
+$("#help-btn").addEventListener("click", openHelp);
+$("#help-close").addEventListener("click", closeHelp);
+$("#help-ok").addEventListener("click", closeHelp);
+$("#help-modal").addEventListener("click", (e) => {
+  if (e.target.id === "help-modal") closeHelp();
+});
+// закрытие по Esc, пока открыта справка
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !$("#help-modal").classList.contains("hidden")) {
+    closeHelp();
+  }
+});
+// плавный переход по оглавлению внутри справки
+$$("#help-modal .help-toc a").forEach((a) =>
+  a.addEventListener("click", (e) => {
+    const id = a.getAttribute("href").slice(1);
+    const target = $("#" + id);
+    if (target) {
+      e.preventDefault();
+      target.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  })
+);
+
+
 
 /* ============================================================ WebSocket (реальное время) */
 function connectWS() {
@@ -311,6 +344,7 @@ async function showTeacher() {
     return;
   }
   const { users, lessons, progress } = data;
+  state.teacherData = data;
 
   let html = '<div class="page-head"><h1>Управление</h1></div>';
 
@@ -356,6 +390,22 @@ async function showTeacher() {
       .join("") +
     "</table></div>";
 
+  html +=
+    '<div class="panel"><h2>Видимость заданий</h2>' +
+    '<p class="hint">По умолчанию каждый ученик видит набор заданий, заданный в самом уроке. ' +
+    "Здесь можно задать набор <b>индивидуально для каждого ученика</b> — он перекроет общий. " +
+    "Сняты все галочки — ученик не видит заданий этого урока вовсе; кнопка «Как в уроке» " +
+    "возвращает индивидуальную настройку к общей.</p>" +
+    (lessons.length
+      ? '<label class="hint">Урок: <select id="vis-lesson">' +
+        lessons
+          .map((l) => '<option value="' + l.id + '">' + esc(l.title) + "</option>")
+          .join("") +
+        "</select></label>"
+      : '<p class="muted">Сначала создайте урок.</p>') +
+    '<div id="vis-table-wrap"></div>' +
+    '<p id="vis-error" class="error-text hidden"></p></div>';
+
   $("#main").innerHTML = html;
   $("#create-user-form").addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -377,6 +427,130 @@ async function showTeacher() {
       err.classList.remove("hidden");
     }
   });
+
+  const visSel = $("#vis-lesson");
+  if (visSel) {
+    visSel.addEventListener("change", () => renderVisTable());
+    renderVisTable();
+  }
+}
+
+const TASK_NAMES = ["1.1", "1.2", "1.3"];
+
+function visTasksFor(lesson, userId, taskVisibility) {
+  const overrides = (taskVisibility || {})[String(lesson.id)] || {};
+  if (Object.prototype.hasOwnProperty.call(overrides, String(userId))) {
+    return overrides[String(userId)];
+  }
+  return lesson.default_visible_tasks || ["1.1", "1.2", "1.3"];
+}
+
+function renderVisTable() {
+  const wrap = $("#vis-table-wrap");
+  if (!wrap) return;
+  const { users, lessons, task_visibility } = state.teacherData;
+  const sel = $("#vis-lesson");
+  const lesson = lessons.find((l) => l.id === +sel.value);
+  if (!lesson) {
+    wrap.innerHTML = "";
+    return;
+  }
+  const students = users.filter((u) => u.role === "student");
+  if (!students.length) {
+    wrap.innerHTML = '<p class="muted">Пока нет учеников — создайте их выше.</p>';
+    return;
+  }
+  const defaults = lesson.default_visible_tasks || ["1.1", "1.2", "1.3"];
+  wrap.innerHTML =
+    '<table class="users-table"><tr><th>Ученик</th>' +
+    TASK_NAMES.map((t) => "<th>Задание " + t + "</th>").join("") +
+    "<th>Набор</th><th></th></tr>" +
+    students
+      .map((u) => {
+        const overrides = (task_visibility || {})[String(lesson.id)] || {};
+        const custom = Object.prototype.hasOwnProperty.call(
+          overrides,
+          String(u.id)
+        );
+        const shown = visTasksFor(lesson, u.id, task_visibility);
+        return (
+          "<tr>" +
+          "<td><b>" + esc(u.username) + "</b></td>" +
+          TASK_NAMES.map(
+            (t) =>
+              '<td><input type="checkbox" class="vis-cb" data-user="' +
+              u.id +
+              '" data-task="' +
+              t +
+              '"' +
+              (shown.includes(t) ? " checked" : "") +
+              "></td>"
+          ).join("") +
+          '<td><span class="' +
+          (custom ? "task-chip custom" : "task-chip") +
+          '">' +
+          (custom ? "индивидуально" : "как в уроке") +
+          "</span></td>" +
+          '<td><button class="btn" data-reset="' +
+          u.id +
+          '"' +
+          (custom ? "" : " disabled") +
+          ">Как в уроке</button></td>" +
+          "</tr>"
+        );
+      })
+      .join("") +
+    "</table>" +
+    '<p class="hint">Общий набор этого урока: ' +
+    defaults.map((t) => "задание " + t).join(", ") +
+    "</p>";
+
+  $$("#vis-table-wrap .vis-cb").forEach((cb) =>
+    cb.addEventListener("change", () => saveVisRow(+cb.dataset.user))
+  );
+  $$("#vis-table-wrap [data-reset]").forEach((b) =>
+    b.addEventListener("click", async () => {
+      if (b.disabled) return;
+      await saveVisRow(+b.dataset.reset, null);
+    })
+  );
+}
+
+async function saveVisRow(userId, tasks) {
+  const errEl = $("#vis-error");
+  errEl.classList.add("hidden");
+  const lessonId = +$("#vis-lesson").value;
+  const reset = tasks === null; // «Как в уроке» — снять индивидуальную настройку
+  if (reset) {
+    tasks = [];
+  } else {
+    tasks = $$('#vis-table-wrap input.vis-cb[data-user="' + userId + '"]')
+      .filter((cb) => cb.checked)
+      .map((cb) => cb.dataset.task);
+  }
+  try {
+    const res = await api("/api/task-visibility", {
+      method: "PUT",
+      body: JSON.stringify({
+        user_id: userId,
+        lesson_id: lessonId,
+        visible_tasks: tasks,
+        reset: reset,
+      }),
+    });
+    const vis = state.teacherData.task_visibility;
+    if (res.custom) {
+      vis[String(lessonId)] = vis[String(lessonId)] || {};
+      vis[String(lessonId)][String(userId)] = res.visible_tasks;
+    } else if (vis[String(lessonId)]) {
+      delete vis[String(lessonId)][String(userId)];
+    }
+    renderVisTable();
+    toast("Видимость обновлена");
+  } catch (ex) {
+    errEl.textContent = ex.message;
+    errEl.classList.remove("hidden");
+  }
 }
 
 /* ============================================================ урок */
@@ -1092,7 +1266,7 @@ async function openLessonEditor(lessonId) {
       $("#lesson-topic").value = l.topic;
       $("#lesson-video").value = l.video_url || "";
       $("#lesson-text").value = l.text_markup;
-      const vis = l.visible_tasks || ["1.1", "1.2", "1.3"];
+      const vis = l.default_visible_tasks || l.visible_tasks || ["1.1", "1.2", "1.3"];
       $("#vis-11").checked = vis.includes("1.1");
       $("#vis-12").checked = vis.includes("1.2");
       $("#vis-13").checked = vis.includes("1.3");
