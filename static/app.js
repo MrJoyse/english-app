@@ -165,7 +165,12 @@ function connectWS() {
           can_delete:
             state.user.role === "teacher" || v.author === state.user.username,
         }));
-        renderVocabulary();
+        if (msg.markup_changed) {
+          // текст урока изменился (**...**) — перезагружаем урок целиком
+          openLesson(state.lesson.id);
+        } else {
+          renderVocabulary();
+        }
       }
     }
     if (msg.type === "activity") {
@@ -621,7 +626,7 @@ function renderLesson() {
     '<div class="lesson-body">' +
     '<div class="lesson-content">' +
     '<section class="panel" id="sec-text"><h2>Текст</h2>' +
-    '<p class="hint">Изучаемые выражения выделены жирным. Выделите любое место текста мышкой — появится кнопка «＋ В словарь», она сохранит фрагмент в словарь урока.</p>' +
+    '<p class="hint">Изучаемые выражения выделены жирным. Выделите любое место текста мышкой — появится кнопка «＋ В словарь»: фрагмент сохранится в словарь и будет взят в **...** как изучаемое выражение (появится в заданиях).</p>' +
     '<div class="lesson-text" id="lesson-text">' + l.text_html + "</div></section>" +
     '<section class="panel" id="vocab-panel"><h2>Словарь урока</h2>' +
     '<p class="hint" id="vocab-hint">Пока пусто — выделите выражение в тексте и нажмите «＋ В словарь».</p>' +
@@ -733,11 +738,15 @@ function initVocabSelection() {
       return;
     }
     try {
-      await api("/api/lessons/" + state.lesson.id + "/vocabulary", {
+      const res = await api("/api/lessons/" + state.lesson.id + "/vocabulary", {
         method: "POST",
         body: JSON.stringify({ term }),
       });
       toast("«" + term + "» — добавлено в словарь 📚");
+      if (res.markup_changed) {
+        // термин взят в **...** в тексте урока — перезагружаем вид
+        openLesson(state.lesson.id);
+      }
     } catch (e) {
       toast(e.message, true);
     }
@@ -829,14 +838,19 @@ function renderVocabulary() {
       const id = b.closest(".vocab-item").dataset.id;
       if (!confirm("Удалить выражение из словаря урока?")) return;
       try {
-        await api(
+        const res = await api(
           "/api/lessons/" + l.id + "/vocabulary/" + id,
           { method: "DELETE" }
         );
-        l.vocabulary = (l.vocabulary || []).filter(
-          (v) => String(v.id) !== String(id)
-        );
-        renderVocabulary();
+        if (res.markup_changed) {
+          // выражение снято и с текста урока — перезагружаем вид
+          openLesson(l.id);
+        } else {
+          l.vocabulary = (l.vocabulary || []).filter(
+            (v) => String(v.id) !== String(id)
+          );
+          renderVocabulary();
+        }
         toast("Удалено из словаря");
       } catch (e) {
         toast(e.message, true);

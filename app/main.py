@@ -4,6 +4,7 @@ import html
 import json
 import os
 import random
+import re
 from datetime import datetime
 from typing import List, Optional
 
@@ -607,6 +608,40 @@ def _sync_vocab_from_markup(db, lesson, exprs, teacher_id):
         )
 
 
+def _wrap_term_in_markup(text, term):
+    """Вернуть text_markup, где все вхождения term (вне **...**) взяты в **...**.
+
+    Ничего не меняем, если term уже оформлен выражением или вне текста не найден.
+    """
+    if not term:
+        return text
+    term_re = re.compile(re.escape(term), re.IGNORECASE)
+    parts = re.split(r"(\*\*.+?\*\*)", text)  # с сохранением **...**-фрагментов
+    changed = False
+    for i in range(0, len(parts), 2):  # только чётные — текст вне разметки
+        if "**" in parts[i]:
+            continue
+        if term_re.search(parts[i]):
+            parts[i] = term_re.sub(lambda m: "**%s**" % m.group(0), parts[i])
+            changed = True
+    return "".join(parts) if changed else text
+
+
+def _unwrap_term_from_markup(text, term):
+    """Вернуть text_markup без **...**-выражений, равных term (удаление из словаря)."""
+    if not term:
+        return text
+    target = " ".join(term.split()).lower()
+
+    def repl(m):
+        full = " ".join(m.group(1).replace("|", " ").split())
+        if full.lower() == target:
+            return full  # снимаем маркеры, оставляя читаемый текст
+        return m.group(0)
+
+    return re.sub(r"\*\*(.+?)\*\*", repl, text)
+
+
 def _validate_lesson(payload: LessonIn) -> list:
     if not payload.title.strip():
         raise HTTPException(status_code=400, detail="Укажите название урока")
@@ -1016,12 +1051,17 @@ def api_task_visibility_set(
 
 
 # ------------------------------------------------------------------ словарь урока
-async def _broadcast_vocab(db, lesson_id):
-    """Отправить всем актуальный словарь урока (без привязки к правам)."""
+async def _broadcast_vocab(db, lesson_id, markup_changed=False):
+    """Отправить всем актуальный словарь урока (без привязки к правам).
+
+    markup_changed=True — текст урока изменился (термин взят в **...** или
+    снят), получатели должны перезагрузить урок.
+    """
     await manager.broadcast(
         {
             "type": "vocabulary",
             "lesson_id": lesson_id,
+            "markup_changed": markup_changed,
             "vocabulary": [
                 {k: v for k, v in item.items() if k != "can_delete"}
                 for item in _vocabulary_list(db, lesson_id)
@@ -1061,6 +1101,13 @@ async def api_vocabulary_add(
         created_by=user.id,
     )
     db.add(entry)
+    # термин из словаря помечается в тексте урока как изучаемое выражение **...**
+    new_markup = _wrap_term_in_markup(lesson.text_markup, term)
+    markup_changed = new_markup != lesson.text_markup
+    if markup_changed:
+        lesson.text_markup = new_markup
+        _save_expressions(db, lesson.id, parse_expressions(new_markup))
+        LESSON_BOARD.pop(lesson_id, None)  # ID выражений изменились — доска с новым порядком
     db.commit()
     await broadcast_activity(
         user_dict(user),
@@ -1068,8 +1115,8 @@ async def api_vocabulary_add(
         "vocab_added",
         lesson_id,
     )
-    await _broadcast_vocab(db, lesson_id)
-    return {"ok": True, "id": entry.id}
+    await _broadcast_vocab(db, lesson_id, markup_changed=markup_changed)
+    return {"ok": True, "id": entry.id, "markup_changed": markup_changed}
 
 
 @app.put("/api/lessons/{lesson_id}/vocabulary/{entry_id}")
@@ -1107,6 +1154,16 @@ async def api_vocabulary_delete(
         raise HTTPException(status_code=403, detail="Удалить может только автор или учитель")
     term = entry.term
     db.delete(entry)
+    # симметрия: термин снимается и с разметки текста урока
+    lesson = db.get(Lesson, lesson_id)
+    markup_changed = False
+    if lesson:
+        new_markup = _unwrap_term_from_markup(lesson.text_markup, term)
+        markup_changed = new_markup != lesson.text_markup
+        if markup_changed:
+            lesson.text_markup = new_markup
+            _save_expressions(db, lesson.id, parse_expressions(new_markup))
+            LESSON_BOARD.pop(lesson_id, None)
     db.commit()
     await broadcast_activity(
         user_dict(user),
@@ -1114,8 +1171,8 @@ async def api_vocabulary_delete(
         "vocab_removed",
         lesson_id,
     )
-    await _broadcast_vocab(db, lesson_id)
-    return {"ok": True}
+    await _broadcast_vocab(db, lesson_id, markup_changed=markup_changed)
+    return {"ok": True, "markup_changed": markup_changed}
 
 
 # ------------------------------------------------------------------ WebSocket
