@@ -23,6 +23,7 @@ from .models import (
     SessionToken,
     TaskVisibility,
     User,
+    VocabularyEntry,
 )
 from .parsing import EXPR_RE, SENTENCE_SPLIT_RE, parse_expressions, youtube_id
 
@@ -255,6 +256,43 @@ def progress_map(db) -> dict:
     return result
 
 
+def _vocabulary_list(db, lesson_id):
+    """Словарь урока в порядке добавления: [{id, term, translation, author, created_at}]."""
+    rows = (
+        db.query(VocabularyEntry)
+        .filter_by(lesson_id=lesson_id)
+        .order_by(VocabularyEntry.id)
+        .all()
+    )
+    if not rows:
+        return []
+    users = {
+        u.id: u.username for u in db.query(User).filter(User.id.in_({r.created_by for r in rows})).all()
+    }
+    return [
+        {
+            "id": r.id,
+            "term": r.term,
+            "translation": r.translation or "",
+            "author": users.get(r.created_by, ""),
+            "can_delete": True,  # заполняется вызывающей стороной
+            "created_at": r.created_at.isoformat(timespec="seconds") if r.created_at else "",
+        }
+        for r in rows
+    ]
+
+
+def _vocab_payload(db, lesson_id, user):
+    """Словарь с учётом прав: учитель удаляет любые записи, ученик — только свои."""
+    items = _vocabulary_list(db, lesson_id)
+    for item in items:
+        item["can_delete"] = bool(
+            user
+            and (user.role == "teacher" or item["author"] == user.username)
+        )
+    return items
+
+
 def build_lesson_payload(lesson: Lesson, db: Session, user: User = None) -> dict:
     exprs = (
         db.query(Expression)
@@ -367,6 +405,7 @@ def build_lesson_payload(lesson: Lesson, db: Session, user: User = None) -> dict
         "default_visible_tasks": _visible_task_list(lesson),
         "board": LESSON_BOARD.setdefault(lesson.id, initial_board_for(lesson, db)),
         "progress": progress_map(db).get(str(lesson.id), {}),
+        "vocabulary": _vocab_payload(db, lesson.id, user),
     }
 
 
@@ -410,6 +449,10 @@ def api_lessons(db: Session = Depends(get_db), user: User = Depends(current_user
         str(l.id): db.query(Expression).filter_by(lesson_id=l.id).count()
         for l in lessons
     }
+    vocab_counts = {
+        str(l.id): db.query(VocabularyEntry).filter_by(lesson_id=l.id).count()
+        for l in lessons
+    }
     return {
         "lessons": [
             {
@@ -417,6 +460,7 @@ def api_lessons(db: Session = Depends(get_db), user: User = Depends(current_user
                 "title": l.title,
                 "topic": l.topic or "",
                 "expression_count": counts[str(l.id)],
+                "vocabulary_count": vocab_counts[str(l.id)],
                 "video_id": youtube_id(l.video_url),
                 "visible_tasks": _task_visibility_for(db, user, l),
                 "default_visible_tasks": _visible_task_list(l),
@@ -538,6 +582,31 @@ def _save_expressions(db, lesson_id, exprs):
         )
 
 
+def _sync_vocab_from_markup(db, lesson, exprs, teacher_id):
+    """Перенос выражений из разметки **...** в словарь урока.
+
+    Все изучаемые выражения урока автоматически становятся записями словаря.
+    Существующие записи (и добавленные вручную) не трогаем — только дополняем
+    отсутствующие, без дубликатов (регистронезависимо).
+    """
+    existing = {
+        " ".join((v.term or "").split()).lower()
+        for v in db.query(VocabularyEntry).filter_by(lesson_id=lesson.id).all()
+    }
+    for e in exprs:
+        term = " ".join((e["full"] or "").split())
+        if not term or term.lower() in existing:
+            continue
+        existing.add(term.lower())
+        db.add(
+            VocabularyEntry(
+                lesson_id=lesson.id,
+                term=term[:200],
+                created_by=teacher_id,
+            )
+        )
+
+
 def _validate_lesson(payload: LessonIn) -> list:
     if not payload.title.strip():
         raise HTTPException(status_code=400, detail="Укажите название урока")
@@ -586,6 +655,7 @@ async def api_lesson_create(
     db.add(lesson)
     db.flush()
     _save_expressions(db, lesson.id, exprs)
+    _sync_vocab_from_markup(db, lesson, exprs, teacher.id)
     db.commit()
     await broadcast_activity(
         user_dict(teacher),
@@ -593,6 +663,7 @@ async def api_lesson_create(
         "lesson_created",
         lesson.id,
     )
+    await _broadcast_vocab(db, lesson.id)
     return {"ok": True, "id": lesson.id}
 
 
@@ -615,6 +686,7 @@ async def api_lesson_update(
         lesson.visible_tasks = _clean_visible_tasks(payload.visible_tasks)
     LESSON_BOARD.pop(lesson_id, None)
     _save_expressions(db, lesson.id, exprs)
+    _sync_vocab_from_markup(db, lesson, exprs, teacher.id)
     db.commit()
 
     await broadcast_activity(
@@ -623,6 +695,7 @@ async def api_lesson_update(
         "lesson_updated",
         lesson.id,
     )
+    await _broadcast_vocab(db, lesson.id)
     return {"ok": True}
 
 
@@ -639,6 +712,7 @@ async def api_lesson_delete(
     db.query(Expression).filter_by(lesson_id=lesson_id).delete()
     db.query(Progress).filter_by(lesson_id=lesson_id).delete()
     db.query(TaskVisibility).filter_by(lesson_id=lesson_id).delete()
+    db.query(VocabularyEntry).filter_by(lesson_id=lesson_id).delete()
     LESSON_BOARD.pop(lesson_id, None)
     db.delete(lesson)
     db.commit()
@@ -883,6 +957,15 @@ class TaskVisibilityIn(BaseModel):
     reset: bool = False  # True → вернуть уроковый набор по умолчанию
 
 
+class VocabularyIn(BaseModel):
+    term: str
+    translation: str = ""
+
+
+class VocabularyUpdateIn(BaseModel):
+    translation: str = ""
+
+
 @app.put("/api/task-visibility")
 def api_task_visibility_set(
     payload: TaskVisibilityIn,
@@ -930,6 +1013,109 @@ def api_task_visibility_set(
         "visible_tasks": [t for t in raw.split(",") if t in TASKS],
         "custom": True,
     }
+
+
+# ------------------------------------------------------------------ словарь урока
+async def _broadcast_vocab(db, lesson_id):
+    """Отправить всем актуальный словарь урока (без привязки к правам)."""
+    await manager.broadcast(
+        {
+            "type": "vocabulary",
+            "lesson_id": lesson_id,
+            "vocabulary": [
+                {k: v for k, v in item.items() if k != "can_delete"}
+                for item in _vocabulary_list(db, lesson_id)
+            ],
+        }
+    )
+
+
+@app.post("/api/lessons/{lesson_id}/vocabulary")
+async def api_vocabulary_add(
+    lesson_id: int,
+    payload: VocabularyIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """Добавить выделенное в тексте выражение в словарь урока."""
+    lesson = db.get(Lesson, lesson_id)
+    if not lesson:
+        raise HTTPException(status_code=404, detail="Урок не найден")
+    term = " ".join((payload.term or "").split())
+    if len(term) < 2:
+        raise HTTPException(status_code=400, detail="Выделите выражение длиной от 2 символов")
+    if len(term) > 200:
+        raise HTTPException(status_code=400, detail="Слишком длинное выделение (максимум 200 символов)")
+    existing = (
+        db.query(VocabularyEntry)
+        .filter_by(lesson_id=lesson_id)
+        .filter(VocabularyEntry.term.ilike(term))
+        .first()
+    )
+    if existing:
+        raise HTTPException(status_code=400, detail="Это выражение уже есть в словаре урока")
+    entry = VocabularyEntry(
+        lesson_id=lesson_id,
+        term=term,
+        translation=" ".join((payload.translation or "").split())[:300],
+        created_by=user.id,
+    )
+    db.add(entry)
+    db.commit()
+    await broadcast_activity(
+        user_dict(user),
+        "добавил(а) в словарь «%s»" % term,
+        "vocab_added",
+        lesson_id,
+    )
+    await _broadcast_vocab(db, lesson_id)
+    return {"ok": True, "id": entry.id}
+
+
+@app.put("/api/lessons/{lesson_id}/vocabulary/{entry_id}")
+async def api_vocabulary_update(
+    lesson_id: int,
+    entry_id: int,
+    payload: VocabularyUpdateIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """Перевод/пояснение: правит учитель или автор записи."""
+    entry = db.get(VocabularyEntry, entry_id)
+    if not entry or entry.lesson_id != lesson_id:
+        raise HTTPException(status_code=404, detail="Запись не найдена")
+    if user.role != "teacher" and entry.created_by != user.id:
+        raise HTTPException(status_code=403, detail="Править может только автор или учитель")
+    entry.translation = " ".join((payload.translation or "").split())[:300]
+    db.commit()
+    await _broadcast_vocab(db, lesson_id)
+    return {"ok": True}
+
+
+@app.delete("/api/lessons/{lesson_id}/vocabulary/{entry_id}")
+async def api_vocabulary_delete(
+    lesson_id: int,
+    entry_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """Удаляет учитель или автор записи."""
+    entry = db.get(VocabularyEntry, entry_id)
+    if not entry or entry.lesson_id != lesson_id:
+        raise HTTPException(status_code=404, detail="Запись не найдена")
+    if user.role != "teacher" and entry.created_by != user.id:
+        raise HTTPException(status_code=403, detail="Удалить может только автор или учитель")
+    term = entry.term
+    db.delete(entry)
+    db.commit()
+    await broadcast_activity(
+        user_dict(user),
+        "удалил(а) из словаря «%s»" % term,
+        "vocab_removed",
+        lesson_id,
+    )
+    await _broadcast_vocab(db, lesson_id)
+    return {"ok": True}
 
 
 # ------------------------------------------------------------------ WebSocket

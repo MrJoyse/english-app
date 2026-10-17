@@ -449,6 +449,77 @@ select {
 .expr-preview-box h4 { margin: 0 0 8px; font-size: 14px; }
 .expr-preview-box li code { background: #fff; padding: 2px 6px; border-radius: 4px; }
 
+/* ---------------------------------------------------------- словарь урока */
+/* сетка урока: контент + навигация справа */
+.lesson-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 170px;
+  gap: 20px;
+  align-items: start;
+}
+.lesson-content { min-width: 0; }
+.lesson-aside {
+  position: sticky;
+  top: 70px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 12px;
+}
+.aside-link {
+  display: block;
+  padding: 7px 10px;
+  border-radius: 8px;
+  color: var(--ink);
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 600;
+}
+.aside-link:hover { background: var(--accent-soft); color: var(--accent-dark); }
+@media (max-width: 1100px) {
+  .lesson-body { grid-template-columns: 1fr; }
+  .lesson-aside {
+    position: static;
+    flex-direction: row;
+    flex-wrap: wrap;
+    order: -1;
+  }
+}
+
+.vocab-add-btn {
+  position: absolute;
+  z-index: 50;
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 6px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(37, 99, 235, .35);
+}
+.vocab-add-btn:hover { background: var(--accent-dark); }
+
+.vocab-list { margin-top: 4px; }
+.vocab-item {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.vocab-term { font-weight: 700; color: var(--accent-dark); }
+.vocab-translation { color: var(--ink); }
+.vocab-translation::before { content: "— "; color: var(--muted); }
+.vocab-meta { font-size: 13px; margin-left: auto; }
+.vocab-actions { display: inline-flex; gap: 4px; }
+.vocab-actions .btn { padding: 2px 8px; font-size: 13px; }
+.vocab-actions .btn.danger:hover { background: var(--red-soft); }
+
 /* ---------------------------------------------------------- тост */
 .toast {
   position: fixed;

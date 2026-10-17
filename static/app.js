@@ -158,6 +158,16 @@ function connectWS() {
     if (msg.type === "board") {
       if (state.lesson && msg.lesson_id === state.lesson.id) applyBoard(msg.board);
     }
+    if (msg.type === "vocabulary") {
+      if (state.lesson && msg.lesson_id === state.lesson.id) {
+        state.lesson.vocabulary = (msg.vocabulary || []).map((v) => ({
+          ...v,
+          can_delete:
+            state.user.role === "teacher" || v.author === state.user.username,
+        }));
+        renderVocabulary();
+      }
+    }
     if (msg.type === "activity") {
 
       addActivity(msg);
@@ -244,6 +254,7 @@ function renderLive(states) {
 async function showLessons() {
   state.view = "lessons";
   setActiveNav("lessons");
+  teardownVocabSelection();
   try {
     state.lessonsData = await api("/api/lessons");
   } catch (e) {
@@ -293,6 +304,7 @@ function renderLessons() {
       " · " +
       l.expression_count +
       " выражений" +
+      (l.vocabulary_count ? " · 📚 словарь: " + l.vocabulary_count : "") +
       (l.video_id ? " · 🎬 видео" : "") +
       "</span></div>" +
       '<div class="lesson-actions"><button class="btn primary" data-open="' +
@@ -337,6 +349,7 @@ async function showTeacher() {
   if (state.user.role !== "teacher") return;
   state.view = "teacher";
   setActiveNav("teacher");
+  teardownVocabSelection();
   let data;
   try {
     data = await api("/api/users");
@@ -604,20 +617,24 @@ function renderLesson() {
     '<button class="btn ghost" id="back-btn">← К урокам</button>' +
     '<button class="btn ghost" id="reset-board-btn">⟲ Начать заново</button>' +
     '<div class="lesson-header"><h1>' + esc(l.title) + '</h1>' +
-
     '<span class="topic">' + esc(l.topic || "без темы") + "</span></div>" +
-    '<section class="panel"><h2>Текст</h2>' +
-    '<p class="hint">Изучаемые выражения выделены жирным.</p>' +
-    '<div class="lesson-text">' + l.text_html + "</div></section>" +
+    '<div class="lesson-body">' +
+    '<div class="lesson-content">' +
+    '<section class="panel" id="sec-text"><h2>Текст</h2>' +
+    '<p class="hint">Изучаемые выражения выделены жирным. Выделите любое место текста мышкой — появится кнопка «＋ В словарь», она сохранит фрагмент в словарь урока.</p>' +
+    '<div class="lesson-text" id="lesson-text">' + l.text_html + "</div></section>" +
+    '<section class="panel" id="vocab-panel"><h2>Словарь урока</h2>' +
+    '<p class="hint" id="vocab-hint">Пока пусто — выделите выражение в тексте и нажмите «＋ В словарь».</p>' +
+    '<ul id="vocab-list" class="plain-list vocab-list"></ul></section>' +
     (l.video_id
-      ? '<section class="panel"><h2>Видео</h2>' +
+      ? '<section class="panel" id="sec-video"><h2>Видео</h2>' +
         '<p class="hint">Материал урока — посмотрите и повторите новые выражения вслух.</p>' +
         '<div class="video-wrap"><iframe src="https://www.youtube.com/embed/' +
         esc(l.video_id) +
         '" title="Видео урока" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe></div></section>'
       : "") +
     (vis.includes("1.1")
-      ? '<section class="panel"><h2>Задание 1.1 — собери выражения</h2>' +
+      ? '<section class="panel" id="sec-task11"><h2>Задание 1.1 — собери выражения</h2>' +
         '<p class="hint">Кликните по левой части выражения (она подсветится зелёным), затем по правой — либо перетащите одну на другую мышкой. Подсвечиваются только кликнутые части: зелёная — верная пара (через 2 секунды соберётся вниз), красная — неверная (через 2 секунды выбор сбросится). Подсветку видно и с другого аккаунта.</p>' +
         '<div class="match-columns"><div class="match-col" id="col-left"></div>' +
         '<div class="match-col" id="col-right"></div></div>' +
@@ -625,18 +642,28 @@ function renderLesson() {
         '<div class="task-done hidden" id="task11-done">✓ Задание 1.1 выполнено</div></section>'
       : "") +
     (vis.includes("1.2")
-      ? '<section class="panel"><h2>Задание 1.2 — вставь пропущенные выражения</h2>' +
+      ? '<section class="panel" id="sec-task12"><h2>Задание 1.2 — вставь пропущенные выражения</h2>' +
         '<p class="hint">Кликните по выражению в списке ниже, затем по пропуску — либо перетащите. Правильное встанет сразу; ошибочное подсветится красным на 2 секунды и вернётся в список. Клик по вставленном пропуске возвращает выражение обратно.</p>' +
         '<div class="gap-text" id="gap-text">' + l.sentences_html + "</div>" +
         '<div class="chip-pool" id="chip-pool"></div>' +
         '<div class="task-done hidden" id="task12-done">✓ Задание 1.2 выполнено</div></section>'
       : "") +
     (vis.includes("1.3")
-      ? '<section class="panel"><h2>Задание 1.3 — впиши недостающее слово</h2>' +
+      ? '<section class="panel" id="sec-task13"><h2>Задание 1.3 — впиши недостающее слово</h2>' +
         '<p class="hint">В предложениях внутри изучаемых выражений пропущено слово — напечатайте его. Верное слово подсветится зелёным и зафиксируется, неверное — красным; можно править.</p>' +
         '<div class="gap-text" id="gap13-text">' + l.sentences13_html + "</div>" +
         '<div class="task-done hidden" id="task13-done">✓ Задание 1.3 выполнено</div></section>'
-      : "");
+      : "") +
+    "</div>" + // .lesson-content
+    '<nav class="lesson-aside">' +
+    '<a class="aside-link" href="#sec-text">Текст</a>' +
+    (vis.includes("1.1") ? '<a class="aside-link" href="#sec-task11">Упражнение 1.1</a>' : "") +
+    (vis.includes("1.2") ? '<a class="aside-link" href="#sec-task12">Упражнение 1.2</a>' : "") +
+    (vis.includes("1.3") ? '<a class="aside-link" href="#sec-task13">Упражнение 1.3</a>' : "") +
+    '<a class="aside-link" href="#vocab-panel">Словарь</a>' +
+    (l.video_id ? '<a class="aside-link" href="#sec-video">Видео</a>' : "") +
+    "</nav>" +
+    "</div>"; // .lesson-body
   $("#back-btn").addEventListener("click", showLessons);
   $("#reset-board-btn").addEventListener("click", async () => {
     if (
@@ -667,7 +694,182 @@ function renderLesson() {
   initTask11(l);
   initTask12(l);
   initTask13(l);
+  renderVocabulary();
+  initVocabSelection();
   applyBoard(l.board || defaultBoard(l));
+}
+
+/* ============================================================ словарь урока */
+/* Выделение в тексте урока → плавающая кнопка «＋ В словарь». */
+let vocabSelHandler = null;
+
+function initVocabSelection() {
+  const textEl = $("#lesson-text");
+  if (!textEl) return;
+  if (vocabSelHandler) {
+    document.removeEventListener("mouseup", vocabSelHandler);
+    vocabSelHandler = null;
+  }
+  hideVocabButton();
+
+  const btn = document.createElement("button");
+  btn.id = "vocab-add-btn";
+  btn.type = "button";
+  btn.className = "vocab-add-btn hidden";
+  btn.textContent = "＋ В словарь";
+  btn.title = "Добавить выделенное выражение в словарь урока";
+  document.body.appendChild(btn);
+
+  const hideBtn = () => btn.classList.add("hidden");
+
+  btn.addEventListener("mousedown", (e) => e.preventDefault()); // не сбрасывать выделение
+  btn.addEventListener("click", async () => {
+    const sel = window.getSelection();
+    const term = btn.dataset.term || (sel ? sel.toString() : "").replace(/\s+/g, " ").trim();
+    hideBtn();
+    if (sel) sel.removeAllRanges();
+    if (term.length < 2) {
+      toast("Выделите выражение длиной от 2 символов", true);
+      return;
+    }
+    try {
+      await api("/api/lessons/" + state.lesson.id + "/vocabulary", {
+        method: "POST",
+        body: JSON.stringify({ term }),
+      });
+      toast("«" + term + "» — добавлено в словарь 📚");
+    } catch (e) {
+      toast(e.message, true);
+    }
+  });
+
+  vocabSelHandler = (e) => {
+    // клик по самой кнопке не должен сбрасывать выделение до отправки
+    if (e.target === btn) return;
+    setTimeout(() => {
+      // страница урока закрыта — снимаем слушатель совсем
+      if (!state.lesson || state.view !== "lesson" || !document.body.contains(textEl)) {
+        teardownVocabSelection();
+        return;
+      }
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed || !sel.rangeCount) {
+        hideBtn(); // просто прячем кнопку, слушатель остаётся
+        return;
+      }
+      if (!textEl.contains(sel.getRangeAt(0).commonAncestorContainer)) {
+        hideBtn();
+        return;
+      }
+      const term = sel.toString().replace(/\s+/g, " ").trim();
+      if (term.length < 2) {
+        hideBtn();
+        return;
+      }
+      const rect = sel.getRangeAt(0).getBoundingClientRect();
+      btn.dataset.term = term;
+      btn.style.top = window.scrollY + rect.top - 42 + "px";
+      btn.style.left = window.scrollX + rect.left + "px";
+      btn.classList.remove("hidden");
+    }, 0);
+  };
+  document.addEventListener("mouseup", vocabSelHandler);
+}
+
+function hideVocabButton() {
+  const btn = $("#vocab-add-btn");
+  if (btn) btn.remove();
+}
+
+/* убираем кнопку и слушатель при уходе со страницы урока */
+function teardownVocabSelection() {
+  hideVocabButton();
+  if (vocabSelHandler) {
+    document.removeEventListener("mouseup", vocabSelHandler);
+    vocabSelHandler = null;
+  }
+}
+
+function renderVocabulary() {
+  const list = $("#vocab-list");
+  if (!list) return;
+  const l = state.lesson;
+  const items = l.vocabulary || [];
+  const hint = $("#vocab-hint");
+  if (hint) hint.classList.toggle("hidden", items.length > 0);
+  list.innerHTML = items
+    .map((v) => {
+      const canEdit =
+        state.user.role === "teacher" || v.author === state.user.username;
+      return (
+        '<li class="vocab-item" data-id="' +
+        v.id +
+        '"><span class="vocab-term">' +
+        esc(v.term) +
+        "</span>" +
+        (v.translation
+          ? '<span class="vocab-translation">' + esc(v.translation) + "</span>"
+          : "") +
+        '<span class="vocab-meta muted">' +
+        (v.author ? "· " + esc(v.author) : "") +
+        "</span>" +
+        (canEdit
+          ? '<span class="vocab-actions">' +
+            '<button class="btn ghost vocab-edit" title="Перевод/пояснение">✏️</button>' +
+            '<button class="btn ghost danger vocab-del" title="Удалить">✕</button>' +
+            "</span>"
+          : "") +
+        "</li>"
+      );
+    })
+    .join("");
+
+  $$("#vocab-list .vocab-del").forEach((b) =>
+    b.addEventListener("click", async () => {
+      const id = b.closest(".vocab-item").dataset.id;
+      if (!confirm("Удалить выражение из словаря урока?")) return;
+      try {
+        await api(
+          "/api/lessons/" + l.id + "/vocabulary/" + id,
+          { method: "DELETE" }
+        );
+        l.vocabulary = (l.vocabulary || []).filter(
+          (v) => String(v.id) !== String(id)
+        );
+        renderVocabulary();
+        toast("Удалено из словаря");
+      } catch (e) {
+        toast(e.message, true);
+      }
+    })
+  );
+
+  $$("#vocab-list .vocab-edit").forEach((b) =>
+    b.addEventListener("click", async () => {
+      const item = b.closest(".vocab-item");
+      const id = item.dataset.id;
+      const entry = (l.vocabulary || []).find(
+        (v) => String(v.id) === String(id)
+      );
+      if (!entry) return;
+      const value = prompt(
+        "Перевод / пояснение для «" + entry.term + "»:",
+        entry.translation || ""
+      );
+      if (value === null) return;
+      try {
+        await api("/api/lessons/" + l.id + "/vocabulary/" + id, {
+          method: "PUT",
+          body: JSON.stringify({ translation: value }),
+        });
+        entry.translation = value.replace(/\s+/g, " ").trim().slice(0, 300);
+        renderVocabulary();
+        toast("Сохранено");
+      } catch (e) {
+        toast(e.message, true);
+      }
+    })
+  );
 }
 
 

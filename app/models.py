@@ -72,3 +72,21 @@ class Progress(Base):
     lesson_id = Column(Integer, ForeignKey("lessons.id"), index=True)
     task = Column(String(8), nullable=False)  # "1.1" | "1.2"
     completed_at = Column(DateTime, default=datetime.utcnow)
+
+
+class VocabularyEntry(Base):
+    """Словарь урока: выражения, сохранённые из текста урока выделением.
+
+    Отдельный раздел урока (как задания 1.1–1.3). term — выделенный в тексте
+    фрагмент, translation — необязательный перевод/пояснение, которое можно
+    добавить позже. Записи общие для всех, кто открывает урок.
+    """
+
+    __tablename__ = "vocabulary"
+
+    id = Column(Integer, primary_key=True)
+    lesson_id = Column(Integer, ForeignKey("lessons.id"), index=True)
+    term = Column(String(200), nullable=False)
+    translation = Column(String(300), default="")
+    created_by = Column(Integer, ForeignKey("users.id"))
+    created_at = Column(DateTime, default=datetime.utcnow)
